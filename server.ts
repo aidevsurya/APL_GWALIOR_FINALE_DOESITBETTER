@@ -2,6 +2,11 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import { exec } from "child_process";
+import { promisify } from "util";
+import fs from "fs";
+
+const execPromise = promisify(exec);
 
 // Standard types matching Section 2 database layouts as structures
 interface DBUser {
@@ -375,97 +380,242 @@ async function startServer() {
       let default_branch = "main";
       let alertMessage = "";
 
-      // 2. Perform live fetch & crawl streams if it's GitHub
+      // 2. Perform live fetch, clone, or crawl streams if it's GitHub
       if (isGithub) {
+        const cloneDir = path.join("/tmp", `reposcope_${owner}_${repo}_${Date.now()}`);
+        let cloneSuccessful = false;
+
         try {
-          // Fetch repo metadata
-          const metaUrl = `https://api.github.com/repos/${owner}/${repo}`;
-          const metaRes = await fetch(metaUrl, {
-            headers: {
-              "User-Agent": "RepoScope-Analyzer",
-              "Accept": "application/vnd.github.v3+json"
-            }
-          });
+          console.log(`[RepoScope] Initiating physical git clone for https://github.com/${owner}/${repo}.git to ${cloneDir}`);
+          await execPromise(`git clone --depth 1 https://github.com/${owner}/${repo}.git "${cloneDir}"`);
+          cloneSuccessful = true;
+          console.log(`[RepoScope] Physical clone successful! Extracting files...`);
+        } catch (cloneErr: any) {
+          console.warn(`[RepoScope] Physical git clone failed: ${cloneErr.message}. Gracefully falling back to GitHub API crawling.`);
+        }
 
-          if (metaRes.ok) {
-            const meta = await metaRes.json();
-            project_name = meta.full_name || meta.name || repo;
-            project_description = meta.description || project_description;
-            primary_language = meta.language || primary_language;
-            stars = meta.stargazers_count || 0;
-            forks = meta.forks_count || 0;
-            default_branch = meta.default_branch || "main";
-          } else if (metaRes.status === 403) {
-            alertMessage = "GitHub API rate limit is currently restricted. Switched smoothly to high-fidelity localized code patterns for evaluation.";
-          }
+        if (cloneSuccessful) {
+          try {
+            // Recursive directory walker
+            const walkDir = (currentPath: string, relativeRoot = ""): string[] => {
+              let results: string[] = [];
+              try {
+                const list = fs.readdirSync(currentPath);
+                for (const file of list) {
+                  const fullPath = path.join(currentPath, file);
+                  const relPath = relativeRoot ? `${relativeRoot}/${file}` : file;
+                  const stat = fs.statSync(fullPath);
 
-          // Fetch directory tree to list all files
-          const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${default_branch}?recursive=1`;
-          const treeRes = await fetch(treeUrl, {
-            headers: {
-              "User-Agent": "RepoScope-Analyzer",
-              "Accept": "application/vnd.github.v3+json"
-            }
-          });
+                  if (stat.isDirectory()) {
+                    const lowerFile = file.toLowerCase();
+                    if (
+                      lowerFile !== "node_modules" &&
+                      lowerFile !== ".git" &&
+                      lowerFile !== "dist" &&
+                      lowerFile !== "build" &&
+                      lowerFile !== ".next" &&
+                      lowerFile !== "out" &&
+                      lowerFile !== "coverage" &&
+                      lowerFile !== ".cache"
+                    ) {
+                      results = results.concat(walkDir(fullPath, relPath));
+                    }
+                  } else {
+                    results.push(relPath);
+                  }
+                }
+              } catch (walkErr) {
+                console.error("Error reading directory in crawl:", walkErr);
+              }
+              return results;
+            };
 
-          if (treeRes.ok) {
-            const treeData = await treeRes.json();
-            if (treeData && Array.isArray(treeData.tree)) {
-              // Get first 150 filepaths to avoid overloading
-              folderStructure = treeData.tree
-                .filter((item: any) => item.type === "blob")
-                .map((item: any) => item.path);
-            }
-          }
+            const allFiles = walkDir(cloneDir);
+            folderStructure = allFiles.slice(0, 150);
 
-          // Let's decide which files are worth fetching (package.json and README.md)
-          const hasPackageJson = folderStructure.some(p => p.toLowerCase() === "package.json");
-          const hasReadme = folderStructure.some(p => p.toLowerCase() === "readme.md");
-
-          const filesToFetch: string[] = [];
-          if (hasPackageJson) filesToFetch.push("package.json");
-          if (hasReadme) filesToFetch.push("README.md");
-
-          // Find up to 2 key source code modules
-          const keySourceFiles = folderStructure.filter(p => {
-            const pathLower = p.toLowerCase();
-            return (
-              (pathLower.endsWith(".ts") || pathLower.endsWith(".tsx") || pathLower.endsWith(".js") || pathLower.endsWith(".jsx") || pathLower.endsWith(".py") || pathLower.endsWith(".go") || pathLower.endsWith(".rs") || pathLower.endsWith(".java")) &&
-              !pathLower.includes("node_modules/") &&
-              !pathLower.includes("dist/") &&
-              !pathLower.includes("build/") &&
-              !pathLower.includes(".min.js") &&
-              !pathLower.includes("test") &&
-              !pathLower.startsWith(".")
-            );
-          }).slice(0, 2);
-
-          filesToFetch.push(...keySourceFiles);
-
-          // Fetch file contents
-          for (const f of filesToFetch) {
+            // Fetch metadata from GitHub API to populate stars, forks, and real description if online
             try {
-              const rawFileUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${default_branch}/${f}`;
-              const fileRes = await fetch(rawFileUrl);
-              if (fileRes.ok) {
-                const text = await fileRes.text();
-                // Slice code to prevent token exhaust (max 6000 chars per file)
+              const metaUrl = `https://api.github.com/repos/${owner}/${repo}`;
+              const metaRes = await fetch(metaUrl, {
+                headers: {
+                  "User-Agent": "RepoScope-Analyzer",
+                  "Accept": "application/vnd.github.v3+json"
+                }
+              });
+              if (metaRes.ok) {
+                const meta = await metaRes.json();
+                project_name = meta.full_name || meta.name || repo;
+                project_description = meta.description || project_description;
+                primary_language = meta.language || primary_language;
+                stars = meta.stargazers_count || 0;
+                forks = meta.forks_count || 0;
+              }
+            } catch (metaErr) {
+              console.warn("Could not fetch API metadata, using local repository readings:", metaErr);
+            }
+
+            // Read package.json if present
+            const packageJsonPath = allFiles.find(f => f.toLowerCase() === "package.json");
+            if (packageJsonPath) {
+              try {
+                const content = fs.readFileSync(path.join(cloneDir, packageJsonPath), "utf8");
+                codeSnippets.push({
+                  path: "package.json",
+                  content: content.length > 6000 ? content.substring(0, 6000) + "\n... [TRUNCATED] ..." : content
+                });
+                
+                const parsed = JSON.parse(content);
+                if (parsed.dependencies) {
+                  if (parsed.dependencies.react) primary_language = "React / TypeScript";
+                  else if (parsed.dependencies.vue) primary_language = "Vue / Astro platform";
+                  else if (parsed.dependencies.express) primary_language = "Node.js Express backend";
+                }
+              } catch (e) {
+                console.error("Failed to parse cloned package.json:", e);
+              }
+            }
+
+            // Read README.md if present
+            const readmePath = allFiles.find(f => f.toLowerCase() === "readme.md");
+            if (readmePath) {
+              try {
+                const content = fs.readFileSync(path.join(cloneDir, readmePath), "utf8");
+                codeSnippets.push({
+                  path: "README.md",
+                  content: content.length > 6500 ? content.substring(0, 6500) + "\n... [TRUNCATED] ..." : content
+                });
+              } catch (e) {
+                console.error("Failed to read cloned readme:", e);
+              }
+            }
+
+            // Select up to 3 highest fidelity code modules by file extensions to read
+            const validExtensions = [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".cs", ".sh", ".cpp", ".rb"];
+            const codeFiles = allFiles.filter(f => {
+              const ext = path.extname(f).toLowerCase();
+              const nameLower = f.toLowerCase();
+              return (
+                validExtensions.includes(ext) &&
+                !nameLower.includes("test") &&
+                !nameLower.includes("mock") &&
+                !nameLower.includes("config") &&
+                !nameLower.includes("dist/") &&
+                nameLower.split("/").pop() !== "package.json"
+              );
+            }).slice(0, 3);
+
+            for (const f of codeFiles) {
+              try {
+                const content = fs.readFileSync(path.join(cloneDir, f), "utf8");
                 codeSnippets.push({
                   path: f,
-                  content: text.length > 6000 ? text.substring(0, 6000) + "\n... [TRUNCATED] ..." : text
+                  content: content.length > 5000 ? content.substring(0, 5000) + "\n... [TRUNCATED] ..." : content
                 });
+              } catch (e) {
+                console.error(`Failed to read cloned file ${f}:`, e);
               }
-            } catch (fErr) {
-              console.error(`Failed to fetch file content of ${f}:`, fErr);
             }
-          }
 
-        } catch (crawlErr: any) {
-          console.error("Live Git crawl failed, running simulated fallbacks:", crawlErr.message);
-          alertMessage = `Live GitHub API call offline or rate-limited: ${crawlErr.message}. Real-time evaluation loaded from simulated intelligence.`;
+            // Cleanup the physically cloned directory immediately to prevent space leaks
+            try {
+              fs.rmSync(cloneDir, { recursive: true, force: true });
+              console.log(`[RepoScope] Cloned repository path cleaned successfully.`);
+            } catch (cleanErr) {
+              console.warn(`[RepoScope] Cloned directory cleanup failed:`, cleanErr);
+            }
+
+          } catch (walkError: any) {
+            console.error("Walking cloned folder failed:", walkError);
+            alertMessage = "High fidelity local clone walking failed. Falling back to API queries.";
+            cloneSuccessful = false;
+          }
+        }
+
+        // FALLBACK: If physical clone was not completed/supported, execute REST API requests
+        if (!cloneSuccessful) {
+          try {
+            console.log(`[RepoScope] Fallback: Running recursive GitHub API queries for ${owner}/${repo}`);
+            const metaUrl = `https://api.github.com/repos/${owner}/${repo}`;
+            const metaRes = await fetch(metaUrl, {
+              headers: {
+                "User-Agent": "RepoScope-Analyzer",
+                "Accept": "application/vnd.github.v3+json"
+              }
+            });
+
+            if (metaRes.ok) {
+              const meta = await metaRes.json();
+              project_name = meta.full_name || meta.name || repo;
+              project_description = meta.description || project_description;
+              primary_language = meta.language || primary_language;
+              stars = meta.stargazers_count || 0;
+              forks = meta.forks_count || 0;
+              default_branch = meta.default_branch || "main";
+            } else if (metaRes.status === 403) {
+              alertMessage = "GitHub API rate limit is currently restricted. Switched smoothly to high-fidelity localized code patterns for evaluation.";
+            }
+
+            const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${default_branch}?recursive=1`;
+            const treeRes = await fetch(treeUrl, {
+              headers: {
+                "User-Agent": "RepoScope-Analyzer",
+                "Accept": "application/vnd.github.v3+json"
+              }
+            });
+
+            if (treeRes.ok) {
+              const treeData = await treeRes.json();
+              if (treeData && Array.isArray(treeData.tree)) {
+                folderStructure = treeData.tree
+                  .filter((item: any) => item.type === "blob")
+                  .map((item: any) => item.path);
+              }
+            }
+
+            const hasPackageJson = folderStructure.some(p => p.toLowerCase() === "package.json");
+            const hasReadme = folderStructure.some(p => p.toLowerCase() === "readme.md");
+
+            const filesToFetch: string[] = [];
+            if (hasPackageJson) filesToFetch.push("package.json");
+            if (hasReadme) filesToFetch.push("README.md");
+
+            const keySourceFiles = folderStructure.filter(p => {
+              const pathLower = p.toLowerCase();
+              return (
+                (pathLower.endsWith(".ts") || pathLower.endsWith(".tsx") || pathLower.endsWith(".js") || pathLower.endsWith(".jsx") || pathLower.endsWith(".py") || pathLower.endsWith(".go") || pathLower.endsWith(".rs") || pathLower.endsWith(".java")) &&
+                !pathLower.includes("node_modules/") &&
+                !pathLower.includes("dist/") &&
+                !pathLower.includes("build/") &&
+                !pathLower.includes(".min.js") &&
+                !pathLower.includes("test") &&
+                !pathLower.startsWith(".")
+              );
+            }).slice(0, 2);
+
+            filesToFetch.push(...keySourceFiles);
+
+            for (const f of filesToFetch) {
+              try {
+                const rawFileUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${default_branch}/${f}`;
+                const fileRes = await fetch(rawFileUrl);
+                if (fileRes.ok) {
+                  const text = await fileRes.text();
+                  codeSnippets.push({
+                    path: f,
+                    content: text.length > 6000 ? text.substring(0, 6000) + "\n... [TRUNCATED] ..." : text
+                  });
+                }
+              } catch (fErr) {
+                console.error(`Failed to fetch file content of ${f}:`, fErr);
+              }
+            }
+
+          } catch (crawlErr: any) {
+            console.error("Live Git crawl failed, running simulated fallbacks:", crawlErr.message);
+            alertMessage = `Live GitHub API call offline or rate-limited: ${crawlErr.message}. Real-time evaluation loaded from simulated intelligence.`;
+          }
         }
       } else {
-        // Simple direct file URL download
         try {
           const fileRes = await fetch(cleanUrl);
           if (fileRes.ok) {

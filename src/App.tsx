@@ -89,16 +89,15 @@ export default function App() {
     setLogs([]);
     const logSteps = [
       "⚡ [SYSTEM] RepoScope Unified Miner Core Initiated safely.",
-      "🔍 [CRAWLER] Connecting to remote endpoint API gateways...",
-      "📡 [CRAWLER] Connection established. Parsing path structures...",
-      "⚙️ [CRAWLER] Successfully resolved codebase default branch and metadata streams.",
-      "📂 [CRAWLER] Recursively mapping directories. Mapped directory hierarchy nodes...",
-      "📦 [CRAWLER] Inspecting 'package.json' and critical file modules...",
-      "🔬 [CRAWLER] Found file structures. Extracting codebase configurations to memory buffer...",
-      "🧠 [NEURAL] Connecting to Gemini intelligent developer neural system on port 3000...",
-      "🚀 [NEURAL] Analyzing source structures: Evaluating special engineering under-the-hood highlights...",
-      "✨ [NEURAL] Sorting discoveries: Categorized advanced features from normal UI and routing loops...",
-      "🖥️ [SYSTEM] Stream extraction compiled. Initializing components rendering layout..."
+      "🔍 [CLONER] Commencing physical 'git clone --depth 1' into isolated server container...",
+      "📂 [CLONER] Walked repository workspace successfully -- collected structural metadata.",
+      "📦 [CLONER] Inspecting configuration manifests and source tree indexes...",
+      "📡 [CRAWLER] Connection established. Mapping package.json scripts and README paths...",
+      "🔬 [CRAWLER] Buffer allocated: Loaded core functional code file modules into active memory...",
+      "🧠 [NEURAL] Invoking Gemini developer intelligence engine to process raw file systems...",
+      "🚀 [NEURAL] Analyzing source structures: Synthesizing architectural styles and special achievements...",
+      "✨ [NEURAL] Categorizing features: Segmented rare engineering accomplishments from standard UI components...",
+      "🖥️ [SYSTEM] Evaluation compiled successfully! Binding workspace rendering layout..."
     ];
 
     let index = 0;
@@ -233,10 +232,10 @@ export default function App() {
             <div className="space-y-6 text-center">
               <div className="space-y-2">
                 <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight uppercase">
-                  Deconstruct Any Codebase.
+                  Understand Any GitHub Project.
                 </h2>
                 <p className="text-sm text-gray-400 max-w-lg mx-auto font-sans leading-relaxed">
-                  Analyze deep code paths to automatically extract, catalog, and evaluate special development achievements. Get beautiful organized results with immediate Markdown export.
+                  Translate complex codebases and repository files into clear, human-readable feature summaries. We make it easy for everyone to see and understand the core capabilities, tech stack, and highlights of any project.
                 </p>
               </div>
 
@@ -341,14 +340,20 @@ export default function App() {
                   ref={logTerminalRef}
                   className="p-5 h-[280px] overflow-y-auto text-left text-[11px] leading-relaxed space-y-2 font-mono scrollbar-none scroll-smooth select-all"
                 >
-                  {logs.map((log, index) => (
-                    <div 
-                      key={index} 
-                      className={`${log.includes("[CRAWLER]") ? "text-gray-300" : log.includes("[NEURAL]") ? "text-[#00E5FF]" : log.includes("[SYSTEM]") ? "text-[#00FF66]" : "text-gray-400"}`}
-                    >
-                      {log}
-                    </div>
-                  ))}
+                  {logs.map((log, index) => {
+                    if (!log || typeof log !== "string") return null;
+                    const isCrawler = log.includes("[CRAWLER]");
+                    const isNeural = log.includes("[NEURAL]");
+                    const isSystem = log.includes("[SYSTEM]");
+                    return (
+                      <div 
+                        key={index} 
+                        className={isCrawler ? "text-gray-300" : isNeural ? "text-[#00E5FF]" : isSystem ? "text-[#00FF66]" : "text-gray-400"}
+                      >
+                        {log}
+                      </div>
+                    );
+                  })}
                   {logs.length < 11 && (
                     <div className="text-[#00FF66] animate-pulse">▋</div>
                   )}

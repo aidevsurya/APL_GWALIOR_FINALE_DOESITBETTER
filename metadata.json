@@ -1,6 +1,6 @@
 {
   "name": "Tech-to-Sales Sync Engine",
-  "description": "Deconstructs public repositories and raw codebases using Gemini AI to map out special and normal features with high-fidelity markdown export.",
+  "description": "Explains public repositories and raw codebases using Gemini AI to help non-technical users understand core features with high-fidelity markdown export.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
